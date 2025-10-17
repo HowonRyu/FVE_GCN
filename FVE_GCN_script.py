@@ -1,40 +1,33 @@
 import torch
-from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.nn import GCNConv, global_mean_pool, TopKPooling
 import torch.nn.functional as F
+import torch.optim as optim
+import torch.nn as nn
 import numpy as np
 import pandas as pd
 import sys
 from torch.utils.data import Dataset
 from torch_geometric.loader import DataLoader
-import torch.nn as nn
-import torch.optim as optim
+from FVE_GCN_utils import *
+
 import glob
 import os
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 import time
 
-import torch.nn as nn
-from torch_geometric.nn import TopKPooling
-from torch_geometric.nn import global_mean_pool as gap, global_max_pool as gmp
-from torch_geometric.utils import (add_self_loops, sort_edge_index,
-                                   remove_self_loops)
+from distutils.util import strtobool
+import argparse
+
+
+#from torch_geometric.nn import TopKPooling
+#from torch_geometric.nn import global_mean_pool as gap, global_max_pool as gmp
+#from torch_geometric.utils import (add_self_loops, sort_edge_index, remove_self_loops)
 #from torch_sparse import spspmm
 #from net.braingraphconv import MyNNConv
 
 
-import torch
-import torch.nn.functional as F
-import torch.nn as nn
-from torch_geometric.nn import TopKPooling
-from torch_geometric.nn import global_mean_pool as gap, global_max_pool as gmp
-from torch_geometric.utils import (add_self_loops, sort_edge_index,
-                                   remove_self_loops)
-from distutils.util import strtobool
-
-
-
-if None:
+if None:   # from BrainGNN Li et al. -- no longer use
     class Network(torch.nn.Module):
         def __init__(self, indim, ratio, nclass=1, k=8, R=3):
             '''
@@ -111,6 +104,44 @@ if None:
 
 
 
+
+
+
+class GCN_new(torch.nn.Module):
+    def __init__(self, num_node_features, hidden_dim1=32, hidden_dim2=16, pool_ratio=0.6):
+        super(GCN_new, self).__init__()
+        
+        # GCN + pooling layers
+        self.conv1 = GCNConv(num_node_features, hidden_dim1, bias=True)
+        self.pool1 = TopKPooling(hidden_dim1, ratio=pool_ratio)
+
+        self.conv2 = GCNConv(hidden_dim1, hidden_dim2, bias=True)
+        self.pool2 = TopKPooling(hidden_dim2, ratio=pool_ratio)
+
+        # classifier after readout for regression
+        self.linear = torch.nn.Linear(hidden_dim2 * 2, 1)
+
+        # initialization
+        torch.nn.init.kaiming_uniform_(self.conv1.lin.weight, nonlinearity='relu')
+        torch.nn.init.kaiming_uniform_(self.conv2.lin.weight, nonlinearity='relu')
+        torch.nn.init.kaiming_uniform_(self.linear.weight, nonlinearity='relu')
+        torch.nn.init.zeros_(self.linear.bias)
+
+    def forward(self, x, edge_index, batch):
+        x = F.relu(self.conv1(x, edge_index))
+        x, edge_index, _, batch, _, _ = self.pool1(x, edge_index, None, batch)
+
+        x = F.relu(self.conv2(x, edge_index))
+        x, edge_index, _, batch, _, _ = self.pool2(x, edge_index, None, batch)
+
+        #readout
+        x_mean = global_mean_pool(x, batch)
+        x_max  = global_max_pool(x, batch)
+        x = torch.cat([x_mean, x_max], dim=1)
+
+        return self.linear(x)
+
+
 class GCN(torch.nn.Module):
     def __init__(self, num_node_features, hidden_dim1=32, hidden_dim2=15):
         super(GCN, self).__init__()
@@ -132,6 +163,20 @@ class GCN(torch.nn.Module):
         return self.linear(x)
 
 
+class GCN_bare(torch.nn.Module):
+    def __init__(self, num_node_features):
+        super().__init__()
+        self.conv1 = GCNConv(num_node_features, 1, bias=False)
+        self.post_pool = torch.nn.Linear(1, 1, bias=True)
+
+        torch.nn.init.xavier_uniform_(self.conv1.lin.weight)
+        torch.nn.init.xavier_uniform_(self.post_pool.weight)
+
+    def forward(self, x, edge_index, batch):
+        x = self.conv1(x, edge_index)
+        x = global_add_pool(x, batch)
+        return self.post_pool(x)
+
 
 class GCN_deeper(torch.nn.Module):
     def __init__(self, num_node_features):
@@ -143,7 +188,7 @@ class GCN_deeper(torch.nn.Module):
         self.dropout = torch.nn.Dropout(p=0.3)
         self.linear = torch.nn.Linear(64, 1)
 
-        # Initialize weights (optional, but good)
+        # Initialize weights (uniform)
         torch.nn.init.kaiming_uniform_(self.conv1.lin.weight, nonlinearity='relu')
         torch.nn.init.kaiming_uniform_(self.conv2.lin.weight, nonlinearity='relu')
         torch.nn.init.kaiming_uniform_(self.linear.weight, nonlinearity='linear')
@@ -175,11 +220,6 @@ def debug_check(batch):
         print("Edge index out of bounds:", batch.edge_index.max().item(), "vs", batch.x.shape[0])
 
 
-def save_model(model, path="GCN_models/model.pt"):
-    torch.save(model.state_dict(), path)
-    print(f"Model weights saved to {path}")
-
-
 
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -192,14 +232,13 @@ def train_epoch(model, loader, criterion, optimizer, device):
 
         out = model(batch.x, batch.edge_index, batch.batch)
 
-        target = batch.y.view(-1).float()   
+        target = batch.y.view(-1, 1).float()
         loss = criterion(out, target)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
 
     return total_loss / len(loader)
-
 
 
 
@@ -211,7 +250,7 @@ def evaluate(model, loader, criterion, device):
         batch = batch.to(device)  
         out = model(batch.x, batch.edge_index, batch.batch)
         
-        target = batch.y.view(-1).float()   # MSE requires float
+        target = batch.y.view(-1, 1).float()  
         loss = criterion(out, target)
         total_loss += loss.item()
     return total_loss / len(loader)
@@ -226,7 +265,6 @@ def train_model(model, train_loader, test_loader, epochs=100, patience=5, lr=0.0
     best_state = None
     patience_counter = 0
 
-    print(f"lr={lr}, weight_decay={weight_decay}")
     print(f"lr={lr}, weight_decay={weight_decay}", file=log, flush=True)
 
 
@@ -234,7 +272,6 @@ def train_model(model, train_loader, test_loader, epochs=100, patience=5, lr=0.0
         train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
         test_loss = evaluate(model, test_loader, criterion, device)
 
-        print(f"Epoch {epoch:03d} | Train Loss: {train_loss:.6f} | Test Loss: {test_loss:.6f} {time.ctime(time.time())}")
         print(f"Epoch {epoch:03d} | Train Loss: {train_loss:.6f} | Test Loss: {test_loss:.6f} {time.ctime(time.time())}", file=log, flush=True)
 
         if test_loss < best_loss:
@@ -245,93 +282,125 @@ def train_model(model, train_loader, test_loader, epochs=100, patience=5, lr=0.0
             patience_counter += 1
 
         if patience_counter >= patience:
-            print(f"Early stopping triggered after {epoch} epochs (best test loss: {best_loss:.6f})")
             print(f"Early stopping triggered after {epoch} epochs (best test loss: {best_loss:.6f})", file=log, flush=True)
             break
 
     if best_state is not None:
         model.load_state_dict(best_state)
-        print("Restored best model with test loss:", best_loss)
-        #log.write(f"Restored best model with test loss: {best_loss}\n")
-        #log.flush()
+        print("Restored best model with test loss:", best_loss, file=log, flush=True)
+
 
     return model
 
 
-def main(lr, weight_decay, epochs, job_nickname=None, model_type="base", patience=5, partial=False):
-    job_full_nickname = f"{job_nickname}_p{patience}_lr{lr}_wd{weight_decay}"
+
+def main(args):
+    job_full_nickname = f"{args.job_nickname}_p{args.patience}_lr{args.lr}_wd{args.weight_decay}"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-   
 
-    with open(f"/niddk-data-central/mae_hr/FVE/CGN_models/{job_full_nickname}.txt", "w") as f:
-        f.write("Writing model output... \n")
-        f.write(f"Using device: {device} \n")
-        f.flush()
-        batch_size = 100
+    with open(f"GCN_models/{job_full_nickname}.txt", "w") as f:
+        print(f"Writing model output... using device: {device}", file=f, flush=True)
+        print(
+            f"epochs={args.epochs}, patience={args.patience}, batch_size={args.batch_size}, "
+            f"norm={args.norm_y}, partial={args.partial_dat}, age/sex={args.icld_age_sex}, "
+            f"scaler={args.scaler_name}, device={device}",
+            file=f,
+            flush=True,
+        )
 
+        # data load
         print(f"Loading data at {time.ctime(time.time())}", file=f, flush=True)
-        print(f"partia={partial}", file=f, flush=True)
-        if partial:
-            graph_list = torch.load("/niddk-data-central/mae_hr/FVE/CGN_data/FVE_CGN_graph_list_partial.pt")
-        else:
-            graph_list = torch.load("/niddk-data-central/mae_hr/FVE/CGN_data/FVE_CGN_graph_list.pt")
 
-        train_dataset, test_dataset = train_test_split(graph_list, test_size=0.2, random_state=42)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, drop_last=False)
+        if args.partial_dat:
+            FVE_df_org = pd.read_csv("data/FVE_dat_partial.csv")
+            SurfeView_surfaces = scipy.io.loadmat("data/SurfeView_surfaces.mat")
+            non_surface_area_vars = ["nihtbx_cryst_uncorrected"]
+        else:
+            FVE_df_org = pd.read_csv("data/FVE_dat.csv")
+            SurfeView_surfaces = scipy.io.loadmat("data/SurfeView_surfaces.mat")
+            non_surface_area_vars = ["interview_age", "sex_2", "nihtbx_cryst_uncorrected"]
+
+        train_loader, val_loader, test_loader = input_to_graph(
+            SurfeView_surfaces=SurfeView_surfaces,
+            FVE_df_all=FVE_df_org,
+            partial_dat=args.partial_dat,
+            scaler=args.scaler_name,
+            norm_y=args.norm_y,
+            icld_age_sex=args.icld_age_sex,
+            batch_size=args.batch_size,
+        )
+
         print(f"Data loaded at {time.ctime(time.time())}", file=f, flush=True)
-        
-        # define model
-        if model_type == "base":
-            model = GCN(num_node_features=1).to(device)  
-        elif model_type == "deep":
-            model = GCN_deeper(num_node_features=1).to(device)  
-        elif model_type == "BrainGNN":
+
+        # select model
+        if args.model_type == "base":
+            model = GCN(num_node_features=1).to(device)
+        elif args.model_type == "deep":
+            model = GCN_deeper(num_node_features=1).to(device)
+        elif args.model_type == "BrainGNN":
             model = Network(indim=1, ratio=0.8).to(device)
 
-        # model training
+        # training
         print(f"Start training at {time.ctime(time.time())}", file=f, flush=True)
-        trained_model = train_model(model=model, train_loader=train_loader, test_loader=test_loader,
-                                    lr=lr, weight_decay=weight_decay, epochs=epochs, patience=5, log=f, device=device)
-        
-        #save_model(trained_model, f"/niddk-data-central/mae_hr/FVE/CGN_models/{job_full_nickname}_weights.pt")
-        torch.save(trained_model, f"/niddk-data-central/mae_hr/FVE/CGN_models/{job_full_nickname}_full.pt")
+        boolean_map = {False: "F", True: "T"}
+        job_full_nickname = (
+            f"{args.job_nickname}_partial{boolean_map[args.partial_dat]}_cov{boolean_map[args.icld_age_sex]}"
+            f"_p{args.patience}_norm{boolean_map[args.norm_y]}"
+        )
 
+        trained_model = train_model(
+            model=model,
+            train_loader=train_loader,
+            test_loader=val_loader,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            epochs=args.epochs,
+            patience=args.patience,
+            log=f,
+            device=device,
+        )
 
+        # model save
+        torch.save(
+            trained_model,
+            f"GCN_models/{job_full_nickname}_full.pt",
+        )
         print(f"Start eval at {time.ctime(time.time())}", file=f, flush=True)
- 
 
+        # eval
         trained_model.eval()
         y_pred, y_true = [], []
-
         with torch.no_grad():
-            for batch in test_loader:
+            for batch in val_loader:
                 batch = batch.to(device)
-                if model_type == "BrainGNN":
-                    out = trained_model(batch.x, batch.edge_index, batch.batch, batch.edge_attr, batch.pos)
-                else:
-                    out = trained_model(batch.x, batch.edge_index, batch.batch)
-                y_pred.extend(out.cpu().numpy().flatten())  
-                y_true.extend(batch.y.cpu().numpy().flatten())  
+                out = trained_model(batch.x, batch.edge_index, batch.batch)
+                y_pred.extend(out.cpu().numpy().flatten())
+                y_true.extend(batch.y.cpu().numpy().flatten())
 
-        y_pred = np.array(y_pred)
-        y_true = np.array(y_true)
-
+        y_pred, y_true = np.array(y_pred), np.array(y_true)
         r2 = r2_score(y_true, y_pred)
         mse = mean_squared_error(y_true, y_pred)
-        print(f'R2 Score: {r2:.4f}, MSE: {mse:.4f}')
-        print(f'R2 Score: {r2:.4f}, MSE: {mse:.4f}', file=f, flush=True)
+        print(f"R2 Score: {r2:.4f}, MSE: {mse:.4f}", file=f, flush=True)
+
 
 
 
 if __name__ == "__main__":
-    lr = float(sys.argv[1]) 
-    weight_decay = float(sys.argv[2])
-    epochs = int(sys.argv[3])
-    job_nickname = sys.argv[4]
-    model_type = str(sys.argv[5])
-    patience = int(sys.argv[6])
-    partial = bool(strtobool(sys.argv[7]))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--weight_decay", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--job_nickname", type=str, required=True)
+    parser.add_argument("--model_type", type=str, default="base",
+                        choices=["base", "deep", "BrainGNN", "new"])
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=100)
+    parser.add_argument("--norm_y", action="store_true")
+    parser.add_argument("--partial_dat", action="store_true")
+    parser.add_argument("--icld_age_sex", action="store_true")
+    parser.add_argument("--scaler_name", type=str, default="standard",
+                        choices=["standard", "minmax"],)
 
-    main(lr=lr, weight_decay=weight_decay, epochs=epochs, job_nickname=job_nickname, model_type=model_type, patience=patience, partial=partial)
+    args = parser.parse_args()
+    main(args)

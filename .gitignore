@@ -1,14 +1,18 @@
 # special repo files
-CGN_data/
-CGN_models/
-data_out/
+GCN_data/
+GCN_models/
 FVE_old
 LR_output/
+data/
 net/
 rf_output/
 Rlibs/
 scripts_archive/
 sh_scripts/
+data_out/
+FVE_GCN_CNN_archive.ipynb
+data_preprocessing.R
+FVE_GCN_CNN.ipynb
 .RData
 .Rhistory
 
