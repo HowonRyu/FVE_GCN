@@ -90,9 +90,10 @@ def build_surface_adjacency(coords, faces):
 
 
 def input_to_graph(SurfeView_surfaces, FVE_df_all, norm_y=False, scaler="minmax",
-                   partial_dat=False, icld_age_sex=False, batch_size=20):
-    vertices, faces = load_surface_mesh(SurfeView_surfaces)
+                   partial_dat=False, partial_tsa_dat=False, icld_age_sex=False, batch_size=20):
 
+
+    vertices, faces = load_surface_mesh(SurfeView_surfaces)
     # graph structure
     A_csr = build_surface_adjacency(vertices, faces)
     edge_index = torch.tensor(np.array(A_csr.nonzero()), dtype=torch.long)
@@ -105,15 +106,20 @@ def input_to_graph(SurfeView_surfaces, FVE_df_all, norm_y=False, scaler="minmax"
     # train, val, test split
     train_valid, test = train_test_split(FVE_df, test_size=0.2, random_state=42)
     train, val = train_test_split(train_valid, test_size=0.2, random_state=42)
+    
+    
+    # define x columns
+    
+    x_cols = [col for col in FVE_df.columns if ("_r" in col) or ("_l" in col)]
 
-    if partial_dat:
-        norm_cols = list(set(FVE_df.columns) - set('nihtbx_cryst_uncorrected'))
-    else:
-        norm_cols = list(set(FVE_df.columns) - set(['nihtbx_cryst_uncorrected', 'sex_2']))
+    if (not partial_dat and not partial_tsa_dat):
+        x_cols.append("interview_age")
+        x_cols.append("sex_2")
 
-    X_train = train[norm_cols]
-    X_val   = val[norm_cols]
-    X_test  = test[norm_cols]
+    # Normalization
+    X_train = train[x_cols]
+    X_val   = val[x_cols]
+    X_test  = test[x_cols]
 
     y_train = train["nihtbx_cryst_uncorrected"]
     y_val   = val["nihtbx_cryst_uncorrected"]
@@ -126,10 +132,11 @@ def input_to_graph(SurfeView_surfaces, FVE_df_all, norm_y=False, scaler="minmax"
     else:
         scaler_X = StandardScaler().fit(X_train)
 
-    
-    X_train_scaled_all = scaler_X.transform(X_train)
-    X_val_scaled_all   = scaler_X.transform(X_val)
-    X_test_scaled_all  = scaler_X.transform(X_test)
+
+    X_train_scaled = pd.DataFrame(scaler_X.transform(X_train), columns=x_cols, index=X_train.index)
+    X_val_scaled   = pd.DataFrame(scaler_X.transform(X_val),   columns=x_cols, index=X_val.index)
+    X_test_scaled  = pd.DataFrame(scaler_X.transform(X_test),  columns=x_cols, index=X_test.index)
+
 
     # standardize y
     if norm_y:
@@ -143,25 +150,16 @@ def input_to_graph(SurfeView_surfaces, FVE_df_all, norm_y=False, scaler="minmax"
     else:
         y_train_scaled, y_val_scaled, y_test_scaled = y_train, y_val, y_test
 
-    print(f"error check: {y_train_scaled.shape}")
+    print(f"sanity check before create_graph_data: y and x shape: {y_train_scaled.shape}, {X_train_scaled.shape}; x_cols: {X_train_scaled.columns[0:1]} to {X_train_scaled.columns[20483:]}")
+    
     # Graph
-    if partial_dat:
-        train_graph = create_graph_data(X_all=X_train_scaled_all, y=torch.Tensor(y_train_scaled), partial_dat=partial_dat, 
-                                edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=False)
-        validation_graph = create_graph_data(X_all=X_val_scaled_all, y=torch.Tensor(y_val_scaled), partial_dat=partial_dat, 
-                                        edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=False)
-        test_graph = create_graph_data(X_all=X_test_scaled_all, y=torch.Tensor(y_test_scaled), partial_dat=partial_dat, 
-                                        edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=False)    
-    else:
-        train_graph = create_graph_data(X_all=X_train_scaled_all, y=torch.Tensor(y_train_scaled), sex=train['sex_2'], 
-                                        partial_dat=partial_dat, 
-                                edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=icld_age_sex) 
-        validation_graph = create_graph_data(X_all=X_val_scaled_all, y=torch.Tensor(y_val_scaled), sex=val['sex_2'],
-                                             partial_dat=partial_dat, 
-                                        edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=icld_age_sex)
-        test_graph = create_graph_data(X_all=X_test_scaled_all, y=torch.Tensor(y_test_scaled), sex=test['sex_2'],
-                                       partial_dat=partial_dat, 
-                                        edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=icld_age_sex)    
+    train_graph = create_graph_data(X_all=X_train_scaled, y=torch.Tensor(y_train_scaled), partial_dat=partial_dat, partial_tsa_dat= partial_tsa_dat,
+                            edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=icld_age_sex)
+    validation_graph = create_graph_data(X_all=X_val_scaled, y=torch.Tensor(y_val_scaled), partial_dat=partial_dat, partial_tsa_dat= partial_tsa_dat,
+                                    edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=icld_age_sex)
+    test_graph = create_graph_data(X_all=X_test_scaled, y=torch.Tensor(y_test_scaled), partial_dat=partial_dat, partial_tsa_dat= partial_tsa_dat,
+                                    edge_index = edge_index, vertices = torch.FloatTensor(vertices), icld_age_sex=icld_age_sex)    
+
 
     # Loaders
     train_loader = DataLoader(train_graph, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -171,7 +169,7 @@ def input_to_graph(SurfeView_surfaces, FVE_df_all, norm_y=False, scaler="minmax"
     return train_loader, val_loader, test_loader
 
 
-def create_graph_data(X_all, y, edge_index, vertices, sex=None, partial_dat=False, icld_age_sex=False):
+def create_graph_data(X_all, y, edge_index, vertices, partial_dat=False, partial_tsa_dat=False, icld_age_sex=False):
     graphs = []
     
     #pos
@@ -182,21 +180,21 @@ def create_graph_data(X_all, y, edge_index, vertices, sex=None, partial_dat=Fals
     edge_attr = torch.norm(pos[row] - pos[col], p=2, dim=1, keepdim=True)
     
     #node features: X, interview_age, and sex
-    if partial_dat:
-        X = torch.tensor(X_all, dtype=torch.float32).unsqueeze(-1)
+    if (partial_dat or partial_tsa_dat):
+        X = torch.tensor(X_all.to_numpy(), dtype=torch.float32).unsqueeze(-1)
     else:
-        X = torch.tensor(X_all[:,:-1], dtype=torch.float32).unsqueeze(-1)
+        X = torch.tensor(X_all.drop(['interview_age', 'sex_2'], axis=1).to_numpy(), dtype=torch.float32).unsqueeze(-1)
 
     if icld_age_sex:
-        interview_age = torch.tensor(X_all[:,-1])
-        sex = torch.tensor(sex.values)
+        interview_age = torch.tensor(X_all["interview_age"].to_numpy())
+        sex = torch.tensor(X_all["sex_2"].to_numpy())
         age_expanded = interview_age.unsqueeze(1).repeat(1, X.shape[1]).unsqueeze(2)
         sex_expanded = sex.unsqueeze(1).repeat(1, X.shape[1]).unsqueeze(2)           
         node_feat = torch.tensor(torch.cat([X, age_expanded, sex_expanded], dim=2), dtype=torch.float32)
     else:
         node_feat = torch.tensor(X, dtype=torch.float32)
 
-    print(f"icld_age_sex = {icld_age_sex}, node_feat.shape: {node_feat.shape}")
+    print(f"creat_graph_data sanity check: icld_age_sex = {icld_age_sex}, node_feat.shape: {node_feat.shape}")
     for i in range(node_feat.shape[0]):        
         data = Data(
             x=node_feat[i],

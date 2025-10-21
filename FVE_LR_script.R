@@ -1,7 +1,7 @@
 #install.packages(c("tidyverse", "GGally", "broom", "glmnet", "rsample"),lib="/data/howon/FVE/Rlibs", repos = "https://cloud.r-project.org/")
 #install.packages(c("glmnet"),lib="/data/howon/FVE/Rlibs", repos = "https://cloud.r-project.org/")
 #.libPaths("/usr/lib/R/library")
-#install.packages(c("broom", "GGally", "glmnet", "rsample", "readr"))
+install.packages(c("broom", "GGally", "glmnet", "rsample", "readr"))
 library(dplyr)
 library(GGally)
 library(broom)
@@ -46,8 +46,8 @@ dim(reg_test_data_org_partial)
 ##########################  Var estimation Bootstrap  ########################## 
 
 # Bootstrap sampling
-B = 1
-set.seed(1004)
+B = 100
+set.seed(1013)
 
 if (B !=1) {
   boot_samples <- bootstraps(reg_data_org_all, times = B)
@@ -129,10 +129,10 @@ for (b in 1:B) {
     reg_train_data_partial_tsa = reg_train_data_org_partial_tsa
     reg_test_data_partial_tsa = reg_test_data_org_partial_tsa
   } else {
-    split_p <- boot_samples_p_tsa$splits[[b]]
-    reg_train_data_partial_tsa <- analysis(split_p)      # In-bag
-    oob_samples_p  <- assessment(split_p)
-    reg_test_data_partial_tsa <- oob_samples_p %>% slice_sample(n = n2, replace = TRUE)
+    split_p_tsa <- boot_samples_p_tsa$splits[[b]]
+    reg_train_data_partial_tsa <- analysis(split_p_tsa)      # In-bag
+    oob_samples_p_tsa  <- assessment(split_p_tsa)
+    reg_test_data_partial_tsa <- oob_samples_p_tsa %>% slice_sample(n = n2, replace = TRUE)
   }
   
   X_var_mat_train_p_tsa =  as.matrix(reg_train_data_partial_tsa %>% select(-nihtbx_cryst_uncorrected))
@@ -229,8 +229,10 @@ result_tbl_boot[, c(2,4)] <- round(result_tbl_boot[, c(2,4)], 4)
 # save the result
 if (B==1) {
   save(result_tbl_boot, file=paste0(wd, "/LR_output/LR_result_tbl_standard.Rdata"))
+  save(result_dict_boot, file=paste0(wd, "/LR_output/LR_result_dict_standard.Rdata"))
 } else {
   save(result_tbl_boot, file=paste0(wd, "/LR_output/LR_result_tbl_boot", B, ".Rdata"))
+  save(result_dict_boot, file=paste0(wd, "/LR_output/LR_result_dict_boot", B, ".Rdata"))
 }
 
 

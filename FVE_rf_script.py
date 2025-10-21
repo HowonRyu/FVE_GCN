@@ -33,12 +33,10 @@ def rf_bootstrap(exp_name, m=100, seed=None, n_estimators=100, partial=False, pa
                 test_dat = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/reg_test_data_partial.csv")
                 train_dat = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/reg_train_data_partial.csv")
                 x_cols = [col for col in test_dat.columns if ("_r" in col) or ("_l" in col)]
-            
-            if partial_tsa == True:
+            elif partial_tsa == True:
                 test_dat = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/reg_test_data_partial_tsa.csv")
                 train_dat = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/reg_train_data_partial_tsa.csv")
                 x_cols = [col for col in test_dat.columns if ("_r" in col) or ("_l" in col)]
-
             else:
                 test_dat = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/reg_test_data.csv")
                 train_dat = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/reg_train_data.csv")
@@ -55,7 +53,7 @@ def rf_bootstrap(exp_name, m=100, seed=None, n_estimators=100, partial=False, pa
             y_boot = y_boot.reset_index(drop=True)
             X_oob = X_oob.reset_index(drop=True)
             y_oob = y_oob.reset_index(drop=True)
-            print(f"sanity check: partial={partial}, m={m}, dim_x = {X_boot.shape}, {X_oob.shape}; dim_y = {y_boot.shape}, {y_oob.shape}; x_cols={x_cols[0:1]} to {x_cols[20483:len(x_cols)]}")
+            print(f"sanity check: partial={partial}, partial_tsa={partial_tsa}, m={m}, dim_x = {X_boot.shape}, {X_oob.shape}; dim_y = {y_boot.shape}, {y_oob.shape}; x_cols={x_cols[0:1]} to {x_cols[20483:len(x_cols)]}")
 
 
 
@@ -63,11 +61,9 @@ def rf_bootstrap(exp_name, m=100, seed=None, n_estimators=100, partial=False, pa
             if partial == True:
                 FVE_df = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/FVE_dat_partial.csv")
                 x_cols = [col for col in FVE_df.columns if ("_r" in col) or ("_l" in col)]
-            
-            if partial_tsa == True:
+            elif partial_tsa == True:
                 FVE_df = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/FVE_dat_partial_tsa.csv")
                 x_cols = [col for col in FVE_df.columns if ("_r" in col) or ("_l" in col)]
-
             else:
                 FVE_df = pd.read_csv("/niddk-data-central/mae_hr/FVE/data_out/FVE_dat.csv")
                 x_cols = [col for col in FVE_df.columns if ("_r" in col) or ("_l" in col)]
@@ -80,7 +76,7 @@ def rf_bootstrap(exp_name, m=100, seed=None, n_estimators=100, partial=False, pa
             y = FVE_df_nona['nihtbx_cryst_uncorrected']
             X = X.reset_index(drop=True)
             y = y.reset_index(drop=True)
-            print(f"sanity check: partial={partial}, len(x_cols)={len(x_cols)}, x_cols={x_cols[0:1]} to {x_cols[20483:len(x_cols)]}", file=f, flush=True)
+            print(f"sanity check: partial={partial}, partial_tsa={partial_tsa}, m={m}, len(x_cols)={len(x_cols)}, x_cols={x_cols[0:1]} to {x_cols[20483:len(x_cols)]}", file=f, flush=True)
         
 
         print(f"data done at: {time.ctime(time.time())}", file=f, flush=True)
